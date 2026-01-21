@@ -1,0 +1,11 @@
+Metadata-Version: 2.4
+Name: data_autopsy
+Version: 0.1.0
+Summary: Tools for data autopsy and root cause analysis.
+Author: Data Autopsy
+License: MIT
+Requires-Python: >=3.10
+Description-Content-Type: text/markdown
+
+# data_autopsy
+This is a project that helps with data autopsy and root cause analysis 
