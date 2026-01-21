@@ -223,7 +223,13 @@ class MeasurementStore:
         grouped = grouped[[time_col] + [col for col in grouped.columns if col != time_col]]
 
         if time_col in df.columns and not pd.api.types.is_numeric_dtype(time_values):
-            grouped[time_col] = pd.to_datetime(grouped[time_col], unit="s", utc=True)
+            grouped[time_col] = pd.to_datetime(
+                grouped[time_col], 
+                unit="s", 
+                utc=True, 
+                errors="coerce")
+            grouped = grouped.dropna(subset=[time_col])
+
 
         grouped.to_parquet(out_path, index=False)
         return {"path": out_path, "cache_hit": False, "config": config, "key": key}
