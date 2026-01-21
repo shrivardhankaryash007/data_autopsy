@@ -154,6 +154,35 @@ class MeasurementStore:
 
         return {"format": suf.lstrip("."), "note": "minimal metadata in v0"}
 
+    def _normalize_overview_cfg(
+        self, measurement_id: str, cfg: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        allowed = {"measurement_id", "signals", "hz", "agg", "time_col"}
+        base = {
+            "measurement_id": measurement_id,
+            "signals": None,
+            "hz": 1.0,
+            "agg": ["min", "mean", "max"],
+            "time_col": "timestamp",
+        }
+        for key in allowed:
+            if key in cfg and cfg[key] is not None:
+                base[key] = cfg[key]
+
+        hz = float(base["hz"])
+        agg = sorted([str(item) for item in base["agg"]])
+        signals = base["signals"]
+        if signals is not None:
+            signals = sorted([str(item) for item in signals])
+
+        return {
+            "measurement_id": measurement_id,
+            "signals": signals,
+            "hz": hz,
+            "agg": agg,
+            "time_col": str(base["time_col"]),
+        }
+
     def build_overview(
         self,
         measurement_id: str,
@@ -177,15 +206,19 @@ class MeasurementStore:
         if path.suffix.lower() != ".csv":
             raise ValueError("overview cache only supports CSV inputs in v0")
 
-        signals_list = list(signals) if signals is not None else None
-        agg_list = list(agg)
-        config = {
-            "measurement_id": measurement_id,
-            "signals": signals_list,
-            "hz": hz,
-            "agg": agg_list,
-            "time_col": time_col,
-        }
+        config = self._normalize_overview_cfg(
+            measurement_id,
+            {
+                "signals": list(signals) if signals is not None else None,
+                "hz": hz,
+                "agg": list(agg),
+                "time_col": time_col,
+            },
+        )
+        signals_list = config["signals"]
+        agg_list = config["agg"]
+        hz = config["hz"]
+        time_col = config["time_col"]
         key = self.config_key(config)
         out_path = self.cache_path(measurement_id, "overview", key, ".parquet")
         if out_path.exists():
@@ -244,7 +277,8 @@ class MeasurementStore:
             raise ImportError("pandas is required for overview caching") from exc
 
         if isinstance(config_or_key, dict):
-            key = self.config_key(config_or_key)
+            normalized = self._normalize_overview_cfg(measurement_id, config_or_key)
+            key = self.config_key(normalized)
         else:
             key = config_or_key
 
@@ -259,9 +293,10 @@ class MeasurementStore:
         overview_cfg: Dict[str, Any],
         pass1_cfg: Dict[str, Any],
     ) -> Dict[str, Any]:
+        normalized_overview = self._normalize_overview_cfg(measurement_id, overview_cfg)
         config = {
             "measurement_id": measurement_id,
-            "overview_cfg": overview_cfg,
+            "overview_cfg": normalized_overview,
             "pass1_cfg": pass1_cfg,
         }
         key = self.config_key(config)
@@ -276,7 +311,7 @@ class MeasurementStore:
             return payload
 
         try:
-            overview_df = self.load_overview(measurement_id, overview_cfg)
+            overview_df = self.load_overview(measurement_id, normalized_overview)
         except FileNotFoundError as exc:
             raise FileNotFoundError(
                 "Overview cache missing. Build overview before running pass1."
@@ -285,7 +320,7 @@ class MeasurementStore:
         result = build_pass1_from_overview(
             overview_df=overview_df,
             measurement_id=measurement_id,
-            overview_cfg=overview_cfg,
+            overview_cfg=normalized_overview,
             pass1_cfg=pass1_cfg,
             key=key,
             cache_hit=False,

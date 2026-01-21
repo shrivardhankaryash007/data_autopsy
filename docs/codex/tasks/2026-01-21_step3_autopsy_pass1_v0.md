@@ -91,12 +91,21 @@ Run ruff check . and pytest -q. Open a PR.
   - Result: success
 - pytest -q
   - Result: success (7 passed, 2 skipped)
+- ruff check .
+  - Result: success
+- pytest -q
+  - Result: success (7 passed, 2 skipped)
+- ruff check .
+  - Result: success
+- pytest -q
+  - Result: success (7 passed, 2 skipped)
 
 ## PR
 
 - PR: N/A (no remote configured; recorded locally via make_pr)
-- Commit: 5a4e258
+- Commit: dc4b15f
 
 ## Notes
 
 - Pass-1 analysis operates only on cached overview parquet files to avoid full-res loading.
+- Normalized overview config inputs to ensure consistent cache keys across build/load/pass1.
