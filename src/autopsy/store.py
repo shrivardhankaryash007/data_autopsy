@@ -7,6 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterable, Optional
 
+from autopsy.pass1 import AutopsyResultPass1, build_pass1_from_overview
+
 
 def sha256_file_signature(path: Path, head_bytes: int = 2_000_000) -> str:
     """
@@ -152,6 +154,35 @@ class MeasurementStore:
 
         return {"format": suf.lstrip("."), "note": "minimal metadata in v0"}
 
+    def _normalize_overview_cfg(
+        self, measurement_id: str, cfg: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        allowed = {"measurement_id", "signals", "hz", "agg", "time_col"}
+        base = {
+            "measurement_id": measurement_id,
+            "signals": None,
+            "hz": 1.0,
+            "agg": ["min", "mean", "max"],
+            "time_col": "timestamp",
+        }
+        for key in allowed:
+            if key in cfg and cfg[key] is not None:
+                base[key] = cfg[key]
+
+        hz = float(base["hz"])
+        agg = sorted([str(item) for item in base["agg"]])
+        signals = base["signals"]
+        if signals is not None:
+            signals = sorted([str(item) for item in signals])
+
+        return {
+            "measurement_id": measurement_id,
+            "signals": signals,
+            "hz": hz,
+            "agg": agg,
+            "time_col": str(base["time_col"]),
+        }
+
     def build_overview(
         self,
         measurement_id: str,
@@ -175,15 +206,19 @@ class MeasurementStore:
         if path.suffix.lower() != ".csv":
             raise ValueError("overview cache only supports CSV inputs in v0")
 
-        signals_list = list(signals) if signals is not None else None
-        agg_list = list(agg)
-        config = {
-            "measurement_id": measurement_id,
-            "signals": signals_list,
-            "hz": hz,
-            "agg": agg_list,
-            "time_col": time_col,
-        }
+        config = self._normalize_overview_cfg(
+            measurement_id,
+            {
+                "signals": list(signals) if signals is not None else None,
+                "hz": hz,
+                "agg": list(agg),
+                "time_col": time_col,
+            },
+        )
+        signals_list = config["signals"]
+        agg_list = config["agg"]
+        hz = config["hz"]
+        time_col = config["time_col"]
         key = self.config_key(config)
         out_path = self.cache_path(measurement_id, "overview", key, ".parquet")
         if out_path.exists():
@@ -242,7 +277,8 @@ class MeasurementStore:
             raise ImportError("pandas is required for overview caching") from exc
 
         if isinstance(config_or_key, dict):
-            key = self.config_key(config_or_key)
+            normalized = self._normalize_overview_cfg(measurement_id, config_or_key)
+            key = self.config_key(normalized)
         else:
             key = config_or_key
 
@@ -250,3 +286,92 @@ class MeasurementStore:
         if not path.exists():
             raise FileNotFoundError(path)
         return pd.read_parquet(path)
+
+    def run_autopsy_pass1(
+        self,
+        measurement_id: str,
+        overview_cfg: Dict[str, Any],
+        pass1_cfg: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        normalized_overview = self._normalize_overview_cfg(measurement_id, overview_cfg)
+        config = {
+            "measurement_id": measurement_id,
+            "overview_cfg": normalized_overview,
+            "pass1_cfg": pass1_cfg,
+        }
+        key = self.config_key(config)
+        json_path = self.cache_path(measurement_id, "autopsy_pass1", key, ".json")
+        summary_path = self.cache_path(measurement_id, "autopsy_pass1", key, ".md")
+
+        if json_path.exists():
+            payload = json.loads(json_path.read_text(encoding="utf-8"))
+            payload["cache_hit"] = True
+            if summary_path.exists():
+                payload["executive_summary_path"] = str(summary_path)
+            return payload
+
+        try:
+            overview_df = self.load_overview(measurement_id, normalized_overview)
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                "Overview cache missing. Build overview before running pass1."
+            ) from exc
+
+        result = build_pass1_from_overview(
+            overview_df=overview_df,
+            measurement_id=measurement_id,
+            overview_cfg=normalized_overview,
+            pass1_cfg=pass1_cfg,
+            key=key,
+            cache_hit=False,
+        )
+
+        json_path.write_text(result.to_json(), encoding="utf-8")
+        summary_path.write_text(
+            _render_pass1_summary(result, pass1_cfg),
+            encoding="utf-8",
+        )
+        payload = json.loads(json_path.read_text(encoding="utf-8"))
+        payload["executive_summary_path"] = str(summary_path)
+        return payload
+
+    def load_autopsy_pass1(
+        self, measurement_id: str, config_or_key: Dict[str, Any] | str
+    ) -> Dict[str, Any]:
+        if isinstance(config_or_key, dict):
+            key = self.config_key(config_or_key)
+        else:
+            key = config_or_key
+        json_path = self.cache_path(measurement_id, "autopsy_pass1", key, ".json")
+        if not json_path.exists():
+            raise FileNotFoundError(json_path)
+        return json.loads(json_path.read_text(encoding="utf-8"))
+
+
+def _render_pass1_summary(
+    result: AutopsyResultPass1, pass1_cfg: Dict[str, Any]
+) -> str:
+    top_k = int(pass1_cfg.get("top_k_windows", 5))
+    top_n = int(pass1_cfg.get("top_n_signals", 3))
+    lines = [
+        "# Autopsy Pass-1 Executive Summary",
+        "",
+        f"Measurement: `{result.measurement_id}`",
+        f"Config key: `{result.key}`",
+        "",
+        "## Top Windows",
+    ]
+    for idx, window in enumerate(result.windows[:top_k], start=1):
+        lines.append(
+            f"{idx}. Buckets {window['start_bucket']}–{window['end_bucket']} "
+            f"(score {window['score']:.2f}, duration {window['duration_buckets']} buckets)"
+        )
+        top_signals = window["signals"][:top_n]
+        for signal in top_signals:
+            lines.append(
+                f"   - {signal['signal']}: "
+                f"flags={signal['flagged_bucket_count']}, "
+                f"spike_z_max={signal['spike_mad_z_max']:.2f}"
+            )
+        lines.append("")
+    return "\n".join(lines).strip() + "\n"
