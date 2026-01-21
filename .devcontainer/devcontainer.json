@@ -1,0 +1,15 @@
+{
+  "name": "data-autopsy",
+  "image": "mcr.microsoft.com/devcontainers/python:3.11",
+  "postCreateCommand": "python -m pip install -U pip && pip install -e .[dev] && python -m ipykernel install --user --name data-autopsy",
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-python.python",
+        "ms-toolsai.jupyter",
+        "ms-python.black-formatter",
+        "ms-python.isort"
+      ]
+    }
+  }
+}

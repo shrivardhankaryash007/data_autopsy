@@ -1,0 +1,9 @@
+{
+  "format": "csv",
+  "note": "minimal metadata in v0",
+  "measurement_id": "m_e34bab97d1e0",
+  "file_fingerprint": "e34bab97d1e0274540e684d1fbdf8e5bc449382f96776304fad8b6f74d51e181",
+  "path": "/workspaces/data_autopsy/tmp.csv",
+  "label": "toy",
+  "created_at_unix": 1768985289.3107257
+}
