@@ -91,6 +91,10 @@ Run ruff check . and pytest -q. Open a PR.
   - Result: success
 - pytest -q
   - Result: success (7 passed, 2 skipped)
+- pytest -q
+  - Result: success (7 passed, 2 skipped)
+- ruff check .
+  - Result: success
 - ruff check .
   - Result: success
 - pytest -q
@@ -103,9 +107,10 @@ Run ruff check . and pytest -q. Open a PR.
 ## PR
 
 - PR: N/A (no remote configured; recorded locally via make_pr)
-- Commit: dc4b15f
+- Commit: 5ee4191
 
 ## Notes
 
 - Pass-1 analysis operates only on cached overview parquet files to avoid full-res loading.
 - Normalized overview config inputs to ensure consistent cache keys across build/load/pass1.
+- Flatline detection now uses mean stability across time instead of within-bucket spread.

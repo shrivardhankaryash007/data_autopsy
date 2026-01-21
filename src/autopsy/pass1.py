@@ -35,10 +35,10 @@ def _format_time(value: Any) -> Any:
 
 
 def _flatline_mask(
-    spread: Iterable[float],
+    stable_steps: Iterable[bool],
     min_run: int,
 ) -> List[bool]:
-    mask = [val for val in spread]
+    mask = [val for val in stable_steps]
     run_mask = [False] * len(mask)
     runs: List[Dict[str, int]] = []
     start = None
@@ -58,8 +58,9 @@ def _flatline_mask(
         runs.append({"start": start, "end": len(mask) - 1, "length": length})
 
     for run in runs:
-        if run["length"] >= min_run:
-            for idx in range(run["start"], run["end"] + 1):
+        if (run["length"] + 1) >= min_run:
+            start_idx = max(run["start"] - 1, 0)
+            for idx in range(start_idx, run["end"] + 1):
                 run_mask[idx] = True
     return run_mask
 
@@ -141,9 +142,10 @@ def build_pass1_from_overview(
         missing_threshold = float(pass1_cfg["missing_rate"])
         missing_flag_mask = missing_mask & (missing_rate >= missing_threshold)
 
-        spread = (overview[max_col] - overview[min_col]) <= pass1_cfg["flatline_eps"]
+        diffs = mean_values.diff().abs()
+        stable = diffs <= pass1_cfg["flatline_eps"]
         flatline_mask = _flatline_mask(
-            spread.fillna(False).to_list(),
+            stable.fillna(False).to_list(),
             pass1_cfg["flatline_min_run"],
         )
         flatline_runs = 0
@@ -161,8 +163,8 @@ def build_pass1_from_overview(
             flatline_runs += 1
             flatline_max_run = max(flatline_max_run, current_run)
 
-        diffs = mean_values.diff()
-        spike_z = _mad_z(diffs.fillna(0.0).to_list())
+        spike_diffs = mean_values.diff()
+        spike_z = _mad_z(spike_diffs.fillna(0.0).to_list())
         spike_z_abs = np.abs(np.asarray(spike_z))
         spike_mask = spike_z_abs >= pass1_cfg["spike_mad_z"]
         spike_max = float(np.nanmax(spike_z_abs)) if spike_z_abs.size else 0.0
