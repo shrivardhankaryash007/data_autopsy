@@ -5,7 +5,7 @@ import json
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Iterable, Optional
 
 
 def sha256_file_signature(path: Path, head_bytes: int = 2_000_000) -> str:
@@ -151,3 +151,102 @@ class MeasurementStore:
                 return {"format": "mf4", "metadata_error": repr(e)}
 
         return {"format": suf.lstrip("."), "note": "minimal metadata in v0"}
+
+    def build_overview(
+        self,
+        measurement_id: str,
+        signals: Optional[Iterable[str]] = None,
+        hz: float = 1.0,
+        agg: Iterable[str] = ("min", "mean", "max"),
+        time_col: str = "timestamp",
+    ) -> Dict[str, Any]:
+        """
+        Build or load an overview cache for a CSV measurement.
+
+        If time_col exists, bucket by time into 1/hz-second buckets.
+        Otherwise, bucket by row index assuming uniform sampling at 1 Hz and treat
+        the row index as seconds before applying the same 1/hz-second bucketing.
+        """
+        if hz <= 0:
+            raise ValueError("hz must be positive")
+
+        meta = self.meta(measurement_id)
+        path = Path(meta["path"])
+        if path.suffix.lower() != ".csv":
+            raise ValueError("overview cache only supports CSV inputs in v0")
+
+        signals_list = list(signals) if signals is not None else None
+        agg_list = list(agg)
+        config = {
+            "measurement_id": measurement_id,
+            "signals": signals_list,
+            "hz": hz,
+            "agg": agg_list,
+            "time_col": time_col,
+        }
+        key = self.config_key(config)
+        out_path = self.cache_path(measurement_id, "overview", key, ".parquet")
+        if out_path.exists():
+            return {"path": out_path, "cache_hit": True, "config": config, "key": key}
+
+        try:
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError("pandas is required for overview caching") from exc
+
+        df = pd.read_csv(path)
+        if time_col in df.columns:
+            time_values = df[time_col]
+            if pd.api.types.is_numeric_dtype(time_values):
+                seconds = pd.to_numeric(time_values, errors="coerce")
+            else:
+                timestamps = pd.to_datetime(time_values, errors="coerce", utc=True)
+                seconds = timestamps.astype("int64") / 1_000_000_000
+        else:
+            seconds = pd.Series(df.index.to_numpy(), index=df.index, dtype="float64")
+
+        bucket_index = (seconds * hz).floordiv(1).astype("Int64")
+        bucket_seconds = bucket_index.astype("float64") / hz
+        bucket_key = "bucket"
+        df[bucket_key] = bucket_index
+
+        if signals_list is None:
+            signals_list = [
+                col for col in df.columns if col not in {time_col, bucket_key}
+            ]
+
+        grouped = df.groupby(bucket_key)[signals_list].agg(agg_list)
+        grouped.columns = [f"{col}_{stat}" for col, stat in grouped.columns]
+        grouped = grouped.reset_index()
+
+        grouped[time_col] = bucket_seconds.groupby(bucket_index).first().to_numpy()
+        grouped = grouped[[time_col] + [col for col in grouped.columns if col != time_col]]
+
+        if time_col in df.columns and not pd.api.types.is_numeric_dtype(time_values):
+            grouped[time_col] = pd.to_datetime(
+                grouped[time_col], 
+                unit="s", 
+                utc=True, 
+                errors="coerce")
+            grouped = grouped.dropna(subset=[time_col])
+
+
+        grouped.to_parquet(out_path, index=False)
+        return {"path": out_path, "cache_hit": False, "config": config, "key": key}
+
+    def load_overview(self, measurement_id: str, config_or_key: Dict[str, Any] | str):
+        """Load a cached overview DataFrame by config dict or key."""
+        try:
+            import pandas as pd
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise ImportError("pandas is required for overview caching") from exc
+
+        if isinstance(config_or_key, dict):
+            key = self.config_key(config_or_key)
+        else:
+            key = config_or_key
+
+        path = self.cache_path(measurement_id, "overview", key, ".parquet")
+        if not path.exists():
+            raise FileNotFoundError(path)
+        return pd.read_parquet(path)

@@ -12,6 +12,12 @@ authors = [
 
 dependencies = []
 
+[project.optional-dependencies]
+overview = [
+  "pandas",
+  "pyarrow",
+]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 
